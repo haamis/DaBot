@@ -50,18 +50,18 @@ ytdl_flat = yt_dlp.YoutubeDL({**ytdl_format_options, 'extract_flat': True, 'nopl
 
 # --- FFmpeg Audio Filter Options ---
 ffmpeg_options = {
-    'before_options': '-hide_banner -loglevel error',
-    'options': '-loglevel fatal -reconnect -reconnect_streamed -reconnect_on_network_error -reconnect_on_http_error=4xx,5xx -reconnect_delay_max 5 -reconnect_at_eof -vn -filter:a loudnorm=i=-24:tp=-2:lra=7'
+    'before_options': '-hide_banner -loglevel error -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'options': '-loglevel fatal -vn -filter:a loudnorm=i=-24:tp=-2:lra=7'
 }
 
 ffmpeg_nightcore_options = {
-    'before_options': '-hide_banner -loglevel error',
-    'options': '-loglevel fatal -reconnect -reconnect_streamed -reconnect_on_network_error -reconnect_on_http_error=4xx,5xx -reconnect_delay_max 5 -reconnect_at_eof -vn -filter:a asetrate=44100*1.25,aresample=44100,atempo=1.25,loudnorm=i=-24:tp=-2:lra=7'
+    'before_options': '-hide_banner -loglevel error -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'options': '-loglevel fatal -vn -filter:a asetrate=44100*1.25,aresample=44100,atempo=1.25,loudnorm=i=-24:tp=-2:lra=7'
 }
 
 ffmpeg_vaporwave_options = {
-    'before_options': '-hide_banner -loglevel error',
-    'options': '-loglevel fatal -reconnect -reconnect_streamed -reconnect_on_network_error -reconnect_on_http_error=4xx,5xx -reconnect_delay_max 5 -reconnect_at_eof -vn -filter:a asetrate=44100*0.8,aresample=44100,atempo=0.8,loudnorm=i=-24:tp=-2:lra=7'
+    'before_options': '-hide_banner -loglevel error -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'options': '-loglevel fatal -vn -filter:a asetrate=44100*0.8,aresample=44100,atempo=0.8,loudnorm=i=-24:tp=-2:lra=7'
 }
 
 
