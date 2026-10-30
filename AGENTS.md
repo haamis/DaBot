@@ -61,6 +61,13 @@
   the user maintains `cookies.txt` (gitignored). A missing or empty `cookies.txt` is ignored
   (no `cookiefile` set) so a fresh Docker bind mount can't break every extraction; auth-gated
   videos then just fail to load.
+- Stale cookies still extract successfully but hand out URLs that 403 in ffmpeg, so
+  `extract_info_sync` retries once without the cookie file when yt-dlp warns "cookies are no
+  longer valid". The warning stays visible (it means refresh `cookies.txt`); the retry is a
+  fallback, not a fix. Tests in `test/test_ytdlp_errors.py`.
+- YouTube `player_client` is pinned to `web,android`: the default `tv` client's HLS URLs 403
+  here, with or without cookies (verified 2026-10-30). Test playback, not just extraction,
+  before changing the pin.
 - Seek timestamps support compound `1h2m3s` forms with optional suffixes
   (`parse_timestamp` in `music_bot.py`); progress bar / Now Playing use
   `get_effective_duration` / `get_wall_clock_position`, not raw `FFmpegPCMAudio` duration.

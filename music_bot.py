@@ -41,7 +41,12 @@ ytdl_format_options = {
     'no_warnings': False,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
-    'extractor_args': {'youtubepot-bgutilhttp': {'base_url': [POT_PROVIDER_URL]}},
+    # Pin clients: the default 'tv' client's HLS URLs 403 here, with or without
+    # cookies. web/android hand out plain googlevideo URLs that play.
+    'extractor_args': {
+        'youtube': {'player_client': ['web', 'android']},
+        'youtubepot-bgutilhttp': {'base_url': [POT_PROVIDER_URL]},
+    },
 }
 
 # Ignore a missing or empty cookie file: Docker creates an empty directory for a
@@ -184,25 +189,77 @@ class AgeRestrictedError(Exception):
     pass
 
 
+STALE_COOKIE_MARKER = 'cookies are no longer valid'
+
+
+class _YtdlpLogger:
+    """yt-dlp logger: re-emits warnings/errors and flags rejected cookie files.
+
+    Supplying a logger stops yt-dlp printing its own warnings, so they are
+    printed here to keep stale-cookie and provider problems visible in logs.
+    debug/info stay silent: quiet=True already suppresses that output, and
+    yt-dlp routes its screen output through debug once a logger is set.
+    """
+
+    def __init__(self):
+        self.cookies_rejected = False
+        self._seen = set()
+
+    def debug(self, msg):
+        pass
+
+    def info(self, msg):
+        pass
+
+    def warning(self, msg):
+        # yt-dlp ignores only_once when a logger is set, so dedupe per attempt.
+        if msg not in self._seen:
+            self._seen.add(msg)
+            print(f"[yt-dlp] {msg}")
+        if STALE_COOKIE_MARKER in msg:
+            self.cookies_rejected = True
+
+    def error(self, msg):
+        print(f"[yt-dlp] {msg}")
+
+
+def _extract_once(
+    url: str, options: dict, download: bool
+) -> Tuple[Optional[dict], bool, Optional[BaseException]]:
+    """One extraction attempt; returns (info, cookies_rejected, error)."""
+    logger = _YtdlpLogger()
+    client = yt_dlp.YoutubeDL({**options, 'logger': logger})
+    try:
+        return client.extract_info(url, download=download), logger.cookies_rejected, None
+    except Exception as e:
+        if is_age_restricted_error(e):
+            print(f"[ERROR] yt-dlp extraction error for '{url}': {e}")
+            raise AgeRestrictedError(str(e)) from e
+        return None, logger.cookies_rejected, e
+
+
 def extract_info_sync(url: str, download: bool = False, flat: bool = False) -> Optional[dict]:
     """Blocking extraction executed inside the ThreadPoolExecutor.
 
     Builds a fresh YoutubeDL and a fresh options dict per call: yt-dlp
     instances are not thread-safe and its constructor mutates the options
     dict it is given, and this runs on a shared executor pool.
+
+    When YouTube rejects the cookie file, retries anonymously: stale cookies
+    still extract, but the stream URLs they hand out 403 in ffmpeg.
     """
     options = {**ytdl_format_options}
     if flat:
         options.update(extract_flat=True, noplaylist=False)
-    client = yt_dlp.YoutubeDL(options)
-    try:
-        data = client.extract_info(url, download=download)
-        return data
-    except Exception as e:
-        print(f"[ERROR] yt-dlp extraction error for '{url}': {e}")
-        if is_age_restricted_error(e):
-            raise AgeRestrictedError(str(e)) from e
-        return None
+    data, cookies_rejected, error = _extract_once(url, options, download)
+    if cookies_rejected and 'cookiefile' in options:
+        print("[WARNING] YouTube rejected the cookie file; retrying without cookies.")
+        options.pop('cookiefile')
+        retried, _, error = _extract_once(url, options, download)
+        data = retried or data
+    if error and not data:
+        print(f"[ERROR] yt-dlp extraction error for '{url}': {error}")
+    return data
 
 
 # Strong references to fire-and-forget tasks so they are never garbage-collected mid-run
