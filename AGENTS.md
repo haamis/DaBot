@@ -22,6 +22,11 @@
 - `up` pulls `pot-provider` (`pull_policy: always`) and waits for its healthcheck, so it needs
   registry access. A provider that fails to start blocks `up`; a bot that is already running
   keeps working without it.
+- Nightly refresh is a host cron job, not a compose feature:
+  `cd /home/haama/DaBot && docker compose build --pull && docker compose up -d --force-recreate`
+  (log: `~/.cache/dabot-refresh.log`). `--force-recreate` is the part that updates yt-dlp: the
+  `--pre` upgrade runs in the image entrypoint at container start, so an unchanged image would
+  otherwise keep the old version. A failed build skips the `up`, leaving the running bot alone.
 - The bgutil plugin and server must be on the same version; both float (`--pre` pip install,
   `:latest` image), so update them together if yt-dlp starts warning about a mismatch.
 - `./cookies.txt` must exist on the host before `up`, otherwise Docker creates a root-owned
