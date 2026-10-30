@@ -21,32 +21,36 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 MAX_PLAYLIST_LENGTH = 300
 PLAYBACK_SPEEDS = {'nightcore': 1.25, 'vaporwave': 0.8}
-INACTIVITY_TIMEOUT_SECONDS = 60 * 60
 INACTIVITY_CHECK_INTERVAL_SECONDS = 60
 
 # --- Global Executor for Parallel Blocking Tasks ---
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
 
 # --- yt-dlp Options ---
+# bgutil PO-token provider; Docker Compose points this at the pot-provider service.
+POT_PROVIDER_URL = os.environ.get('POT_PROVIDER_URL', 'http://127.0.0.1:4416')
+
 ytdl_format_options = {
-    'format': 'bestaudio/best',
+    'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
     'restrictfilenames': True,
     'noplaylist': True,
     'nocheckcertificate': True,
     'ignoreerrors': False,
     'logtostderr': False,
     'quiet': True,
-    'no_warnings': True,
+    'no_warnings': False,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
+    'extractor_args': {'youtubepot-bgutilhttp': {'base_url': [POT_PROVIDER_URL]}},
 }
 
-# Only include cookiefile if it exists on disk
-if os.path.exists('./cookies.txt'):
-    ytdl_format_options['cookiefile'] = './cookies.txt'
-
-ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
-ytdl_flat = yt_dlp.YoutubeDL({**ytdl_format_options, 'extract_flat': True, 'noplaylist': False})
+# Ignore a missing or empty cookie file: Docker creates an empty directory for a
+# missing bind-mount source, and yt-dlp then fails every extraction on it.
+COOKIE_FILE = './cookies.txt'
+if os.path.isfile(COOKIE_FILE) and os.path.getsize(COOKIE_FILE) > 0:
+    ytdl_format_options['cookiefile'] = COOKIE_FILE
+elif os.path.exists(COOKIE_FILE):
+    print(f"[WARNING] Ignoring unusable cookie file '{COOKIE_FILE}'; videos that need login may fail to load.")
 
 # --- FFmpeg Audio Filter Options ---
 ffmpeg_options = {
@@ -56,12 +60,12 @@ ffmpeg_options = {
 
 ffmpeg_nightcore_options = {
     'before_options': '-hide_banner -loglevel error -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-loglevel fatal -vn -filter:a asetrate=44100*1.25,aresample=44100,atempo=1.25,loudnorm=i=-24:tp=-2:lra=7'
+    'options': '-loglevel fatal -vn -filter:a asetrate=44100*1.25,aresample=44100,loudnorm=i=-24:tp=-2:lra=7'
 }
 
 ffmpeg_vaporwave_options = {
     'before_options': '-hide_banner -loglevel error -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-loglevel fatal -vn -filter:a asetrate=44100*0.8,aresample=44100,atempo=0.8,loudnorm=i=-24:tp=-2:lra=7'
+    'options': '-loglevel fatal -vn -filter:a asetrate=44100*0.8,aresample=44100,loudnorm=i=-24:tp=-2:lra=7'
 }
 
 
@@ -138,8 +142,8 @@ def format_playback_progress(position: float, duration: int, width: int = 18) ->
         return "`Live / unknown duration`"
 
     position = max(0, min(int(position), duration))
-    completed = min(width, int((position / duration) * width))
-    bar = "━" * completed + "🔘" + "━" * (width - completed)
+    completed = min(width - 1, int((position / duration) * width))
+    bar = "━" * completed + "🔘" + "━" * (width - 1 - completed)
     return (
         f"`{datetime.timedelta(seconds=position)}` {bar} "
         f"`{datetime.timedelta(seconds=duration)}`"
@@ -150,19 +154,74 @@ def is_direct_url(text: str) -> bool:
     return bool(re.match(r'^https?://', text.strip()))
 
 
+def is_playlist_url(text: str) -> bool:
+    """Checks if a direct URL points at a playlist via its list= parameter."""
+    return is_direct_url(text) and bool(re.search(r'[?&]list=[\w-]+', text.strip()))
+
+
+AGE_RESTRICTED_MARKERS = (
+    'confirm your age',
+    'age-restricted',
+    'age restricted',
+    'age-verification',
+    'age_verification',
+    'inappropriate for some users',
+)
+
+
+def is_age_restricted_error(err: BaseException) -> bool:
+    """Return True when a yt-dlp exception is an age-gate failure.
+
+    Matches the phrases YouTube/yt-dlp actually use; a bare 'age' substring
+    would also hit 'page' and the "confirm you're not a bot" cookie error.
+    """
+    msg = str(err).lower()
+    return any(marker in msg for marker in AGE_RESTRICTED_MARKERS)
+
+
+class AgeRestrictedError(Exception):
+    """Raised when yt-dlp refuses extraction because the video is age-restricted."""
+    pass
+
+
 def extract_info_sync(url: str, download: bool = False, flat: bool = False) -> Optional[dict]:
-    """Blocking extraction executed inside the ThreadPoolExecutor."""
-    client = ytdl_flat if flat else ytdl
+    """Blocking extraction executed inside the ThreadPoolExecutor.
+
+    Builds a fresh YoutubeDL and a fresh options dict per call: yt-dlp
+    instances are not thread-safe and its constructor mutates the options
+    dict it is given, and this runs on a shared executor pool.
+    """
+    options = {**ytdl_format_options}
+    if flat:
+        options.update(extract_flat=True, noplaylist=False)
+    client = yt_dlp.YoutubeDL(options)
     try:
         data = client.extract_info(url, download=download)
         return data
     except Exception as e:
         print(f"[ERROR] yt-dlp extraction error for '{url}': {e}")
+        if is_age_restricted_error(e):
+            raise AgeRestrictedError(str(e)) from e
         return None
 
 
+# Strong references to fire-and-forget tasks so they are never garbage-collected mid-run
+_background_tasks: set = set()
+
+
+def spawn_background_task(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
 async def safe_extract_info(url: str, download: bool = False, flat: bool = False) -> Optional[dict]:
-    """Non-blocking extraction wrapper."""
+    """Non-blocking extraction wrapper.
+
+    Returns None when extraction fails, except for age-restricted videos
+    which raise AgeRestrictedError so callers can report a specific message.
+    """
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(executor, extract_info_sync, url, download, flat)
 
@@ -172,6 +231,8 @@ async def resolve_stream_url(track: AudioTrack) -> Optional[str]:
 
     Always performs a fresh yt-dlp extraction so the signed stream URL
     is never stale (YouTube invalidates signatures before their nominal expiry).
+
+    Raises AgeRestrictedError when the video fails to load due to age-restriction.
     """
     query = track.webpage_url or track.title
     info = await safe_extract_info(query, download=False, flat=False)
@@ -266,7 +327,6 @@ class ChannelMusicPlayer:
         self.playback_started_at: Optional[float] = None
         self.paused_at: Optional[float] = None
         self.total_paused_time: float = 0.0
-        self.idle_since: Optional[float] = None
         self.inactivity_task: Optional[asyncio.Task] = None
 
     def get_voice_client(self) -> Optional[discord.VoiceClient]:
@@ -277,10 +337,9 @@ class ChannelMusicPlayer:
         return None
 
     def start_inactivity_watchdog(self) -> None:
-        """Disconnect after an hour with no audio playing in this channel."""
+        """Disconnect when the channel is left with no listeners and no audio."""
         if self.inactivity_task and not self.inactivity_task.done():
             return
-        self.idle_since = time.monotonic()
         self.inactivity_task = asyncio.create_task(self._inactivity_watchdog())
 
     async def _inactivity_watchdog(self) -> None:
@@ -298,51 +357,28 @@ class ChannelMusicPlayer:
             self.inactivity_task = None
 
     async def should_disconnect_when_alone(self, vc: discord.VoiceClient) -> bool:
-        """Return whether an idle player is alone with no pending audio."""
+        """Return whether an idle player has no human listeners and no pending audio."""
         members = getattr(vc.channel, "members", ())
-        if len(members) != 1:
+        human_count = sum(1 for m in members if not m.bot)
+        if human_count > 0:
             return False
         async with self.queue_lock:
             return not self.queue
 
     async def disconnect_if_inactive(self) -> bool:
-        """Disconnect when alone and idle, or after the idle timeout."""
+        """Disconnect once every human user has left and nothing is playing, paused, or pending."""
         vc = self.get_voice_client()
         if not vc or not vc.is_connected():
             return False
-        if vc.is_playing():
-            self.idle_since = None
+        if vc.is_playing() or vc.is_paused():
             return False
-        if vc.is_paused():
-            self.idle_since = None
-            return False
-        if await self.should_disconnect_when_alone(vc):
-            await self.clear()
-            self.current = None
-            await vc.disconnect()
-            return True
-        if self.idle_since is None:
-            self.idle_since = time.monotonic()
-            return False
-        if time.monotonic() - self.idle_since < INACTIVITY_TIMEOUT_SECONDS:
-            return False
-        if self.queue:
-            # Timeout expired but tracks are still pending: reset the idle
-            # window instead of dropping them; they will play on next join.
-            self.idle_since = time.monotonic()
+        if not await self.should_disconnect_when_alone(vc):
             return False
 
         await self.clear()
         self.current = None
         await vc.disconnect()
         return True
-
-    def mark_audio_started(self) -> None:
-        self.idle_since = None
-
-    def mark_idle(self) -> None:
-        if self.idle_since is None:
-            self.idle_since = time.monotonic()
 
     async def add_tracks(self, ctx: commands.Context, tracks: List[AudioTrack]) -> None:
         async with self.queue_lock:
@@ -352,7 +388,7 @@ class ChannelMusicPlayer:
         # Trigger playback if idle
         vc = self.get_voice_client()
         if vc and not vc.is_playing() and not vc.is_paused():
-            asyncio.create_task(self.play_next(ctx))
+            spawn_background_task(self.play_next(ctx))
 
     async def play_next(self, ctx: commands.Context) -> None:
         """Pops the next track and starts playback."""
@@ -377,7 +413,11 @@ class ChannelMusicPlayer:
                     self.total_paused_time = 0.0
 
                 # Stream URL resolution (fresh fetch each time)
-                stream_url = await resolve_stream_url(track)
+                try:
+                    stream_url = await resolve_stream_url(track)
+                except AgeRestrictedError:
+                    await ctx.send(f"🔞 Failed to load **{track.title}** due to age-restriction. Skipping...")
+                    continue
                 if not stream_url:
                     await ctx.send(f"⚠️ Failed to resolve stream for: **{track.title}**. Skipping...")
                     continue
@@ -410,7 +450,6 @@ class ChannelMusicPlayer:
                 try:
                     vc.play(audio_source, after=after_callback)
                     self.playback_started_at = time.monotonic()
-                    self.mark_audio_started()
                     break
                 except discord.ClientException as e:
                     print(f"[WARNING] ClientException during play: {e}")
@@ -428,7 +467,6 @@ class ChannelMusicPlayer:
             await ctx.send(f"🎶 **Now playing**: {track.title} `[{track.get_effective_duration_str()}]`{ts_str}{mod_str}")
 
     async def handle_playback_finished(self, ctx: commands.Context) -> None:
-        self.mark_idle()
         await self.play_next(ctx)
         await self.disconnect_if_inactive()
 
@@ -476,7 +514,6 @@ class ChannelMusicPlayer:
         if self.paused_at is not None:
             self.total_paused_time += time.monotonic() - self.paused_at
             self.paused_at = None
-        self.mark_audio_started()
         return True
 
     async def skip(self, ctx: commands.Context) -> bool:
@@ -496,7 +533,7 @@ class ChannelMusicPlayer:
             random.shuffle(temp)
             self.queue = collections.deque(temp)
 
-    async def seek_to(self, ctx: commands.Context, seconds: int, display_str: str) -> bool:
+    async def seek_to(self, seconds: int) -> bool:
         vc = self.get_voice_client()
         if not self.current or not vc:
             return False
@@ -521,7 +558,7 @@ class MultiChannelMusicManager:
     """
     def __init__(self, main_bot: commands.Bot):
         self.main_bot = main_bot
-        self.players: Dict[Tuple[int, int], ChannelMusicPlayer] = {}
+        self.players: Dict[Tuple[int, int, int], ChannelMusicPlayer] = {}
         self.worker_bots: List[commands.Bot] = []
 
     def get_player(
@@ -591,14 +628,18 @@ async def play_handler(ctx: commands.Context, args: Tuple[str, ...], *, modifier
     else:
         query = f"{prefix} {raw_query}".strip() if prefix else raw_query
 
-    is_playlist = "list=" in query or "playlist" in query.lower()
+    is_playlist = is_playlist_url(raw_query)
     tracks_to_add: List[AudioTrack] = []
     feedback_msg: Optional[str] = None
 
     entries: List[dict] = []
     async with ctx.typing():
         if is_playlist:
-            flat_data = await safe_extract_info(query, download=False, flat=True)
+            try:
+                flat_data = await safe_extract_info(query, download=False, flat=True)
+            except AgeRestrictedError:
+                await ctx.send("🔞 Failed to load playlist due to age-restriction.")
+                return
             if not flat_data or 'entries' not in flat_data:
                 await ctx.send("❌ Could not load playlist or playlist is empty.")
                 return
@@ -612,7 +653,11 @@ async def play_handler(ctx: commands.Context, args: Tuple[str, ...], *, modifier
                 return
         else:
             # Single video / search query
-            data = await safe_extract_info(query, download=False, flat=False)
+            try:
+                data = await safe_extract_info(query, download=False, flat=False)
+            except AgeRestrictedError:
+                await ctx.send("🔞 Failed to load video due to age-restriction.")
+                return
             if not data:
                 await ctx.send("❌ No video found.")
                 return
@@ -666,7 +711,7 @@ async def play_handler(ctx: commands.Context, args: Tuple[str, ...], *, modifier
                 webpage_url=track_url or query,
                 duration=int(entry.get('duration') or 0),
                 modifier=modifier,
-                timestamp=timestamp,
+                timestamp=0,
                 requester_name=ctx.author.display_name,
                 requester_id=ctx.author.id,
                 channel_id=ctx.author.voice.channel.id
@@ -686,7 +731,6 @@ async def on_ready():
     print('------')
 
 
-@bot.event
 async def on_voice_state_update(member, before, after):
     """Immediately clean up an idle channel once its last human leaves."""
     if member.bot or before.channel == after.channel or before.channel is None:
@@ -694,6 +738,9 @@ async def on_voice_state_update(member, before, after):
     for player in list(manager.players.values()):
         if player.guild_id == member.guild.id and player.channel_id == before.channel.id:
             await player.disconnect_if_inactive()
+
+
+bot.event(on_voice_state_update)
 
 
 # --- Bot Commands ---
@@ -785,7 +832,11 @@ async def search(ctx: commands.Context, *, query: str):
     vc, player = connection
     await ctx.send(f"🔍 Searching YouTube for: **{query}**...")
 
-    results = await safe_extract_info(f"ytsearch5:{query}", download=False, flat=False)
+    try:
+        results = await safe_extract_info(f"ytsearch5:{query}", download=False, flat=False)
+    except AgeRestrictedError:
+        await ctx.send("🔞 Failed to load video due to age-restriction.")
+        return
     if not results or 'entries' not in results:
         await ctx.send("❌ No results found.")
         return
@@ -892,12 +943,15 @@ async def queue_cmd(ctx: commands.Context):
 
     if queued_tracks:
         lines.append("**Upcoming Queue:**")
+        shown = 0
         for i, track in enumerate(queued_tracks):
-            if i < 15:
-                lines.append(f"`{i+1}.` {track.title} `[{track.get_duration_str()}]`")
-            else:
-                lines.append(f"*... and {len(queued_tracks) - 15} more.*")
+            entry = f"`{i+1}.` {track.title} `[{track.get_duration_str()}]`"
+            if i >= 15 or sum(len(line) + 1 for line in lines) + len(entry) > 1900:
                 break
+            lines.append(entry)
+            shown += 1
+        if shown < len(queued_tracks):
+            lines.append(f"*... and {len(queued_tracks) - shown} more.*")
     elif not current_track:
         lines.append("The queue is currently empty.")
 
@@ -955,7 +1009,7 @@ async def seek_to(ctx: commands.Context, *, timestamp: str):
         await ctx.send(f"❌ Timestamp exceeds song duration (`{player.current.get_duration_str()}`).")
         return
 
-    success = await player.seek_to(ctx, seconds, timestamp)
+    success = await player.seek_to(seconds)
 
     if success:
         formatted = str(datetime.timedelta(seconds=seconds))
@@ -995,6 +1049,15 @@ async def start_all_bots():
                 worker = commands.Bot(command_prefix='!', intents=intents)
                 for command in bot.commands:
                     worker.add_command(command.copy())
+                worker.event(on_voice_state_update)
+
+                def make_worker_ready(worker_bot):
+                    async def on_ready():
+                        print(f'Logged in as {worker_bot.user} (ID: {worker_bot.user.id})')
+                        print('------')
+                    return on_ready
+
+                worker.event(make_worker_ready(worker))
                 manager.worker_bots.append(worker)
                 bot_tasks.append(worker.start(token))
             await asyncio.gather(*bot_tasks)

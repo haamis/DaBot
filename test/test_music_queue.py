@@ -65,31 +65,14 @@ class TestMusicQueue(unittest.IsolatedAsyncioTestCase):
         await self.player.clear()
         self.assertEqual(len(self.player.queue), 0)
 
-    async def test_disconnects_after_one_hour_of_inactivity(self):
-        mock_vc = MagicMock()
-        mock_vc.is_connected.return_value = True
-        mock_vc.is_playing.return_value = False
-        mock_vc.is_paused.return_value = False
-        mock_vc.disconnect = AsyncMock()
-        self.player.get_voice_client = MagicMock(return_value=mock_vc)
-        self.player.idle_since = 100.0
-
-        with patch("music_bot.time.monotonic", return_value=3700.0):
-            disconnected = await self.player.disconnect_if_inactive()
-
-        self.assertTrue(disconnected)
-        mock_vc.disconnect.assert_awaited_once()
-
-    async def test_paused_audio_is_exempt_from_inactivity_disconnect(self):
+    async def test_paused_audio_prevents_disconnect(self):
         mock_vc = MagicMock()
         mock_vc.is_connected.return_value = True
         mock_vc.is_playing.return_value = False
         mock_vc.is_paused.return_value = True
         self.player.get_voice_client = MagicMock(return_value=mock_vc)
-        self.player.idle_since = 100.0
 
-        with patch("music_bot.time.monotonic", return_value=3700.0):
-            disconnected = await self.player.disconnect_if_inactive()
+        disconnected = await self.player.disconnect_if_inactive()
 
         self.assertFalse(disconnected)
         mock_vc.disconnect.assert_not_called()
@@ -108,22 +91,19 @@ class TestMusicQueue(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(disconnected)
         mock_vc.disconnect.assert_awaited_once()
 
-    async def test_active_audio_prevents_inactivity_disconnect(self):
+    async def test_active_audio_prevents_disconnect(self):
         mock_vc = MagicMock()
         mock_vc.is_connected.return_value = True
         mock_vc.is_playing.return_value = True
         mock_vc.is_paused.return_value = False
         self.player.get_voice_client = MagicMock(return_value=mock_vc)
-        self.player.idle_since = 100.0
 
-        with patch("music_bot.time.monotonic", return_value=3700.0):
-            disconnected = await self.player.disconnect_if_inactive()
+        disconnected = await self.player.disconnect_if_inactive()
 
         self.assertFalse(disconnected)
-        self.assertIsNone(self.player.idle_since)
         mock_vc.disconnect.assert_not_called()
 
-    async def test_alone_channel_with_queued_audio_waits_for_timeout(self):
+    async def test_alone_channel_with_queued_audio_stays_connected(self):
         mock_vc = MagicMock()
         mock_vc.is_connected.return_value = True
         mock_vc.is_playing.return_value = False
@@ -132,35 +112,32 @@ class TestMusicQueue(unittest.IsolatedAsyncioTestCase):
         mock_vc.disconnect = AsyncMock()
         self.player.queue.append(AudioTrack(title="Queued", webpage_url="url"))
         self.player.get_voice_client = MagicMock(return_value=mock_vc)
-        self.player.idle_since = 100.0
 
-        with patch("music_bot.time.monotonic", return_value=101.0):
-            disconnected = await self.player.disconnect_if_inactive()
-
-        self.assertFalse(disconnected)
-        mock_vc.disconnect.assert_not_awaited()
-
-    async def test_one_hour_timeout_preserves_queue(self):
-        """If the 1-hour timeout fires but tracks remain queued, reset idle timer instead of disconnecting."""
-        mock_vc = MagicMock()
-        mock_vc.is_connected.return_value = True
-        mock_vc.is_playing.return_value = False
-        mock_vc.is_paused.return_value = False
-        mock_vc.channel.members = [MagicMock(), MagicMock()]
-        mock_vc.disconnect = AsyncMock()
-        self.player.get_voice_client = MagicMock(return_value=mock_vc)
-        self.player.idle_since = 100.0
-        self.player.queue.append(AudioTrack(title="Pending", webpage_url="url"))
-
-        with patch("music_bot.time.monotonic", return_value=3700.0):
-            disconnected = await self.player.disconnect_if_inactive()
+        disconnected = await self.player.disconnect_if_inactive()
 
         self.assertFalse(disconnected)
         self.assertEqual(len(self.player.queue), 1)
         mock_vc.disconnect.assert_not_awaited()
 
+    async def test_channel_with_humans_never_idle_disconnects(self):
+        """Idle disconnects no longer exist: humans present means the bot stays connected."""
+        mock_vc = MagicMock()
+        mock_vc.is_connected.return_value = True
+        mock_vc.is_playing.return_value = False
+        mock_vc.is_paused.return_value = False
+        human1 = MagicMock(bot=False)
+        human2 = MagicMock(bot=False)
+        mock_vc.channel.members = [human1, human2]
+        mock_vc.disconnect = AsyncMock()
+        self.player.get_voice_client = MagicMock(return_value=mock_vc)
+
+        disconnected = await self.player.disconnect_if_inactive()
+
+        self.assertFalse(disconnected)
+        mock_vc.disconnect.assert_not_awaited()
+
     async def test_handle_playback_finished_when_queue_empty(self):
-        """When playback ends and the queue is empty, mark_idle and attempt cleanup."""
+        """When playback ends and the queue is empty, attempt to play next and clean up."""
         self.player.queue = collections.deque()
         self.player.current = None
         ctx = MagicMock()
@@ -170,12 +147,10 @@ class TestMusicQueue(unittest.IsolatedAsyncioTestCase):
         mock_vc.is_paused.return_value = False
         self.player.get_voice_client = MagicMock(return_value=mock_vc)
 
-        with patch.object(self.player, "mark_idle") as mark_idle, \
-             patch.object(self.player, "play_next", new=AsyncMock()) as play_next, \
+        with patch.object(self.player, "play_next", new=AsyncMock()) as play_next, \
              patch.object(self.player, "disconnect_if_inactive", new=AsyncMock()) as disconnect:
             await self.player.handle_playback_finished(ctx)
 
-        mark_idle.assert_called_once()
         play_next.assert_awaited_once_with(ctx)
         disconnect.assert_awaited_once()
 
@@ -258,7 +233,7 @@ class TestMusicQueue(unittest.IsolatedAsyncioTestCase):
         waiting_track = AudioTrack(title="Waiting Track", webpage_url="http://test.com/wait")
         self.player.queue.append(waiting_track)
 
-        success = await self.player.seek_to(mock_ctx, 120, "2:00")
+        success = await self.player.seek_to(120)
         self.assertTrue(success)
         mock_vc.stop.assert_called_once()
 

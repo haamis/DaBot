@@ -1,7 +1,6 @@
-import re
 import unittest
 
-from music_bot import is_direct_url
+from music_bot import is_direct_url, is_playlist_url
 
 
 class TestUrlPrefix(unittest.TestCase):
@@ -29,10 +28,10 @@ class TestUrlPrefix(unittest.TestCase):
 
 
 class TestPlaylistDetection(unittest.TestCase):
-    """Playlist detection should trigger only for actual `?list=` / `&list=` parameters, not the substring `playlist`."""
+    """Playlist detection should trigger only for direct URLs with actual `?list=` / `&list=` parameters, not the substring `playlist`."""
 
     def _is_playlist(self, query: str) -> bool:
-        return bool(re.search(r'[?&]list=[\w-]+', query))
+        return is_playlist_url(query)
 
     def test_youtube_playlist_url(self):
         self.assertTrue(self._is_playlist("https://www.youtube.com/watch?v=abc&list=PL123"))
@@ -45,6 +44,10 @@ class TestPlaylistDetection(unittest.TestCase):
     def test_search_query_without_list(self):
         self.assertFalse(self._is_playlist("https://www.youtube.com/watch?v=abc"))
         self.assertFalse(self._is_playlist("turn around flashdance"))
+
+    def test_search_query_with_list_param_looking_text(self):
+        self.assertFalse(self._is_playlist("songs ?list=abc"))
+        self.assertFalse(self._is_playlist("tracks &list=xyz_123"))
 
 
 if __name__ == '__main__':

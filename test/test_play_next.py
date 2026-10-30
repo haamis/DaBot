@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
-from music_bot import AudioTrack, ChannelMusicPlayer
+from music_bot import AgeRestrictedError, AudioTrack, ChannelMusicPlayer
 
 
 def _make_player():
@@ -84,6 +84,29 @@ class TestPlayNext(unittest.IsolatedAsyncioTestCase):
         sent = " ".join(call.args[0] for call in self.ctx.send.await_args_list)
         self.assertIn("Bad", sent)
         self.assertIn("Good", sent)
+
+    @patch("music_bot.resolve_stream_url")
+    async def test_skips_age_restricted_track(self, mock_resolve):
+        """An age-gated track is reported to the user and skipped, not fatal."""
+        vc = self._wire_idle_vc()
+        gated = AudioTrack(title="Gated", webpage_url="u")
+        good = _ready_track(title="Good")
+
+        async def resolve(track, *_args, **_kwargs):
+            if track.title == "Gated":
+                raise AgeRestrictedError("Sign in to confirm your age")
+            return f"http://stream.test.com/{track.title}"
+
+        mock_resolve.side_effect = resolve
+        self.player.queue.extend([gated, good])
+
+        with patch("music_bot.discord.FFmpegPCMAudio"):
+            await self.player.play_next(self.ctx)
+
+        vc.play.assert_called_once()
+        self.assertEqual(self.player.current.title, "Good")
+        sent = " ".join(call.args[0] for call in self.ctx.send.await_args_list)
+        self.assertIn("age-restriction", sent)
 
     async def test_returns_when_no_voice_client(self):
         self.player.get_voice_client = MagicMock(return_value=None)
