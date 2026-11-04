@@ -134,3 +134,32 @@ AGENTS.md             maintenance notes: deployment, ffmpeg options, design deci
 - **No startup output**: the image runs `python -u` with `PYTHONUNBUFFERED=1`; keep both.
 - **yt-dlp / provider version warnings**: the bgutil plugin and provider image both float;
   update them together.
+
+### Automated cookie updates (Windows → server)
+
+Age-gated videos need fresh cookies. The bot reloads `cookies.txt` on every
+extraction, so you only need to push an updated file — no container restart.
+
+**scripts/export-cookies.py** reads Firefox cookies and writes Netscape format.
+**scripts/push-cookies.ps1 / .bat** runs it and `scp`s the file to the server.
+
+1. On Windows, install deps once:
+   ```powershell
+   pip install browser-cookie3
+   ```
+
+2. Test manually (adjust server/path):
+   ```powershell
+   .\scripts\push-cookies.ps1 -Server haama@192.168.1.50 -RemotePath /home/haama/DaBot/cookies.txt
+   ```
+
+3. Schedule it (Task Scheduler → Create Basic Task):
+   - Trigger: Daily / every 6 hours / whatever you prefer.
+   - Action: Start a program → `powershell.exe`
+   - Arguments:
+     ```
+     -ExecutionPolicy Bypass -File "C:\path\to\DaBot\scripts\push-cookies.ps1" -Server haama@192.168.1.50
+     ```
+   - Run whether user is logged on or not: **No** (needs your Firefox profile).
+
+The server does nothing special; the bot picks up the new file automatically.
