@@ -68,6 +68,10 @@
 - YouTube `player_client` is pinned to `web,android`: the default `tv` client's HLS URLs 403
   here, with or without cookies (verified 2026-10-30). Test playback, not just extraction,
   before changing the pin.
+- YouTube's SABR experiment can return a URL for only an MP4 init segment (`clen` far below
+  `filesize_approx`): ffmpeg exits 0 and plays silence. `extract_info_sync` retries those
+  videos with the `web_embedded` client, which still exposes a full audio track. Keep that
+  fallback when touching the client pin. Tests in `test/test_ytdlp_errors.py`.
 - Seek timestamps support compound `1h2m3s` forms with optional suffixes
   (`parse_timestamp` in `music_bot.py`); progress bar / Now Playing use
   `get_effective_duration` / `get_wall_clock_position`, not raw `FFmpegPCMAudio` duration.

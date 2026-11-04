@@ -164,6 +164,15 @@ def is_playlist_url(text: str) -> bool:
     return is_direct_url(text) and bool(re.search(r'[?&]list=[\w-]+', text.strip()))
 
 
+def is_watch_url(text: str) -> bool:
+    """Checks if a direct URL points at a single video (v= or youtu.be/<id>)."""
+    text = text.strip()
+    return is_direct_url(text) and (
+        bool(re.search(r'[?&]v=[\w-]+', text))
+        or bool(re.match(r'https?://(?:www\.)?youtu\.be/[\w-]+', text))
+    )
+
+
 AGE_RESTRICTED_MARKERS = (
     'confirm your age',
     'age-restricted',
@@ -238,6 +247,21 @@ def _extract_once(
         return None, logger.cookies_rejected, e
 
 
+# YouTube's SABR experiment can hand out a URL for just an MP4 init segment:
+# clen is far below the real size, ffmpeg exits 0, and nothing plays.
+# shortcut: fixed 50% threshold, revisit if a real stream ever looks this small.
+TRUNCATED_STREAM_RATIO = 0.5
+
+
+def has_truncated_stream(info: Optional[dict]) -> bool:
+    """Detect an init-segment-only stream URL (it has a tiny clen vs. its size)."""
+    if not info or info.get('entries'):
+        return False
+    match = re.search(r'[?&]clen=(\d+)', info.get('url') or '')
+    expected = info.get('filesize_approx') or info.get('filesize') or 0
+    return bool(match and expected) and int(match.group(1)) < expected * TRUNCATED_STREAM_RATIO
+
+
 def extract_info_sync(url: str, download: bool = False, flat: bool = False) -> Optional[dict]:
     """Blocking extraction executed inside the ThreadPoolExecutor.
 
@@ -256,6 +280,20 @@ def extract_info_sync(url: str, download: bool = False, flat: bool = False) -> O
         print("[WARNING] YouTube rejected the cookie file; retrying without cookies.")
         options.pop('cookiefile')
         retried, _, error = _extract_once(url, options, download)
+        data = retried or data
+    if has_truncated_stream(data):
+        # Only the embedded clients still expose a full audio stream for these
+        # videos; cookies make that extraction fail ("video unavailable").
+        print(f"[WARNING] yt-dlp returned a truncated stream for '{url}'; retrying with the embedded client.")
+        fallback_options = {
+            **options,
+            'extractor_args': {
+                **options.get('extractor_args', {}),
+                'youtube': {'player_client': ['web_embedded']},
+            },
+        }
+        fallback_options.pop('cookiefile', None)
+        retried, _, error = _extract_once(url, fallback_options, download)
         data = retried or data
     if error and not data:
         print(f"[ERROR] yt-dlp extraction error for '{url}': {error}")
@@ -698,20 +736,29 @@ async def play_handler(ctx: commands.Context, args: Tuple[str, ...], *, modifier
                 await ctx.send("🔞 Failed to load playlist due to age-restriction.")
                 return
             if not flat_data or 'entries' not in flat_data:
-                await ctx.send("❌ Could not load playlist or playlist is empty.")
-                return
-
-            entries = [e for e in flat_data['entries'] if e]
-            if len(entries) > MAX_PLAYLIST_LENGTH:
-                await ctx.send(f"❌ Playlists are limited to **{MAX_PLAYLIST_LENGTH}** tracks.")
-                return
-            if not entries:
-                await ctx.send("❌ No valid videos found in playlist.")
-                return
-        else:
+                # A watch URL with an unusable list= (e.g. a truncated mix ID)
+                # still has a playable video; YouTube itself falls back to it.
+                if not is_watch_url(raw_query):
+                    await ctx.send("❌ Could not load playlist or playlist is empty.")
+                    return
+                await ctx.send("⚠️ Could not load the playlist from `list=`; ignoring it and playing just the video.")
+                is_playlist = False
+            else:
+                entries = [e for e in flat_data['entries'] if e]
+                if len(entries) > MAX_PLAYLIST_LENGTH:
+                    await ctx.send(f"❌ Playlists are limited to **{MAX_PLAYLIST_LENGTH}** tracks.")
+                    return
+                if not entries:
+                    await ctx.send("❌ No valid videos found in playlist.")
+                    return
+        if not is_playlist:
             # Single video / search query
             try:
                 data = await safe_extract_info(query, download=False, flat=False)
+                if not data and not is_direct_url(query):
+                    # An 11-char search term matches YouTube's bare video-ID
+                    # pattern; retry as a search when no such video exists.
+                    data = await safe_extract_info(f"ytsearch1:{query}", download=False, flat=False)
             except AgeRestrictedError:
                 await ctx.send("🔞 Failed to load video due to age-restriction.")
                 return

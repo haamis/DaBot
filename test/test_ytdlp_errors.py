@@ -2,7 +2,12 @@ import unittest
 from unittest.mock import patch
 
 import music_bot
-from music_bot import STALE_COOKIE_MARKER, extract_info_sync, is_age_restricted_error
+from music_bot import (
+    STALE_COOKIE_MARKER,
+    extract_info_sync,
+    has_truncated_stream,
+    is_age_restricted_error,
+)
 
 
 class TestAgeRestrictedDetection(unittest.TestCase):
@@ -96,6 +101,64 @@ class TestStaleCookieFallback(unittest.TestCase):
                 patch.dict(music_bot.ytdl_format_options, {}, clear=True):
             extract_info_sync('https://example.com/watch?v=x')
         self.assertEqual(len(calls), 1)
+
+
+class TestTruncatedStreamFallback(unittest.TestCase):
+    def test_detects_init_segment_url(self):
+        self.assertTrue(has_truncated_stream({
+            'url': 'https://x/videoplayback?clen=24996',
+            'filesize_approx': 1868397,
+        }))
+
+    def test_normal_stream_is_not_truncated(self):
+        self.assertFalse(has_truncated_stream({
+            'url': 'https://x/videoplayback?clen=11829048',
+            'filesize_approx': 11832459,
+        }))
+        self.assertFalse(has_truncated_stream({'url': 'https://x/videoplayback'}))
+        self.assertFalse(has_truncated_stream(None))
+
+    def test_search_results_are_left_alone(self):
+        # The search result itself has no stream URL; its entries do.
+        self.assertFalse(has_truncated_stream({
+            'entries': [{'url': 'https://x/videoplayback?clen=24996'}],
+            'filesize_approx': 1868397,
+        }))
+
+    def _run(self, primary_info):
+        calls = []
+
+        class FakeYDL:
+            def __init__(self, options):
+                self.options = options
+                calls.append(options)
+
+            def extract_info(self, url, download=False):
+                clients = self.options.get('extractor_args', {}).get('youtube', {}).get('player_client')
+                if clients == ['web_embedded']:
+                    return {'url': 'https://x/videoplayback?clen=788798'}
+                return primary_info
+
+        with patch.object(music_bot.yt_dlp, 'YoutubeDL', FakeYDL), \
+                patch.dict(music_bot.ytdl_format_options, {'cookiefile': './cookies.txt'}):
+            info = extract_info_sync('https://example.com/watch?v=x')
+        return calls, info
+
+    def test_retries_with_embedded_client_for_truncated_stream(self):
+        truncated = {'url': 'https://x/videoplayback?clen=24996', 'filesize_approx': 1868397}
+        calls, info = self._run(truncated)
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1]['extractor_args']['youtube']['player_client'], ['web_embedded'])
+        self.assertNotIn('cookiefile', calls[1])
+        self.assertEqual(info['url'], 'https://x/videoplayback?clen=788798')
+
+    def test_no_fallback_for_complete_stream(self):
+        complete = {'url': 'https://x/videoplayback?clen=11829048', 'filesize_approx': 11832459}
+        calls, info = self._run(complete)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(info['url'], complete['url'])
 
 
 if __name__ == '__main__':
