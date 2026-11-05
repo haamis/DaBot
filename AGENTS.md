@@ -65,6 +65,10 @@
   `extract_info_sync` retries once without the cookie file when yt-dlp warns "cookies are no
   longer valid". The warning stays visible (it means refresh `cookies.txt`); the retry is a
   fallback, not a fix. Tests in `test/test_ytdlp_errors.py`.
+- Export cookies on the Firefox desktop with `scripts/export-cookies.py`. It
+  excludes accumulated YouTube `ST-*` cookies (oversized headers cause HTTP 413)
+  and atomically replaces the output only after a successful export. Keep cookie
+  backups and temporary exports out of Git and Docker build contexts.
 - YouTube `player_client` is pinned to `web,android`: the default `tv` client's HLS URLs 403
   here, with or without cookies (verified 2026-10-30). Test playback, not just extraction,
   before changing the pin.

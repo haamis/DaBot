@@ -1,0 +1,13 @@
+services:
+  music-bot:
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  pot-provider:
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

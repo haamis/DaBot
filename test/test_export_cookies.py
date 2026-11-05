@@ -68,6 +68,55 @@ class TestExportCookies(unittest.TestCase):
             self.assertEqual(module.export_cookies(out), 0)
             self.assertFalse(out.exists())
 
+    def test_filters_accumulated_st_cookies_but_keeps_login_cookies(self):
+        cookies = [
+            FakeCookie('.youtube.com', name=f'ST-{i}', value='x' * 3800)
+            for i in range(59)
+        ]
+        cookies.extend([
+            FakeCookie('.youtube.com', name='SID', value='login'),
+            FakeCookie('.youtube.com', name='__Secure-3PAPISID', value='secure-login'),
+            FakeCookie('www.youtube.com', name='ST-host', value='x' * 3800),
+            FakeCookie('.youtube.com', name='PREF', value='preferences'),
+        ])
+        module = load_script(cookies)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'cookies.txt'
+            self.assertEqual(module.export_cookies(out), 3)
+            lines = [l.split('\t') for l in out.read_text().splitlines()
+                     if not l.startswith('#')]
+
+        self.assertEqual([(l[5], l[6]) for l in lines], [
+            ('SID', 'login'),
+            ('__Secure-3PAPISID', 'secure-login'),
+            ('PREF', 'preferences'),
+        ])
+
+    def test_only_st_cookies_preserves_existing_output(self):
+        module = load_script([FakeCookie('.youtube.com', name='ST-only')])
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'cookies.txt'
+            out.write_text('existing working cookies\n')
+            self.assertEqual(module.export_cookies(out), 0)
+            self.assertEqual(out.read_text(), 'existing working cookies\n')
+
+    def test_only_st_cookies_does_not_create_output(self):
+        module = load_script([FakeCookie('.youtube.com', name='ST-only')])
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'cookies.txt'
+            self.assertEqual(module.export_cookies(out), 0)
+            self.assertFalse(out.exists())
+
+    def test_failed_replacement_preserves_output_and_cleans_temporary_file(self):
+        module = load_script([FakeCookie('.youtube.com')])
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'cookies.txt'
+            out.write_text('existing cookies\n')
+            with patch.object(Path, 'replace', side_effect=PermissionError('locked')):
+                self.assertEqual(module.export_cookies(out), 0)
+            self.assertEqual(out.read_text(), 'existing cookies\n')
+            self.assertEqual(list(Path(tmp).iterdir()), [out])
+
 
 if __name__ == '__main__':
     unittest.main()

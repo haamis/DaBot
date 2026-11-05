@@ -34,6 +34,8 @@ ENV/
 
 # Sensitive files
 cookies.txt
+cookies.txt.*
+.cookies.txt.*.tmp
 .env
 .env.local
 
