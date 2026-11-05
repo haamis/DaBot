@@ -5,39 +5,40 @@ REM   Default server: haama@server
 REM   Default remote: /home/haama/DaBot/cookies.txt
 REM   Default python: python
 
-setlocal enabledelayedexpansion
+setlocal
 
-set SERVER=%~1
-if "%SERVER%"=="" set SERVER=haama@server
+set "SERVER=%~1"
+if "%SERVER%"=="" set "SERVER=haama@server"
 
-set REMOTE_PATH=%~2
-if "%REMOTE_PATH%"=="" set REMOTE_PATH=/home/haama/DaBot/cookies.txt
+set "REMOTE_PATH=%~2"
+if "%REMOTE_PATH%"=="" set "REMOTE_PATH=/home/haama/DaBot/cookies.txt"
 
-set PYTHON_CMD=%~3
-if "%PYTHON_CMD%"=="" set PYTHON_CMD=python
+set "PYTHON_CMD=%~3"
+if "%PYTHON_CMD%"=="" set "PYTHON_CMD=python"
 
-set SCRIPT_PATH=.\export-cookies.py
-set LOCAL_COOKIE=cookies.txt
+REM Resolve relative to this .bat, not the caller's working directory.
+set "SCRIPT_PATH=%~dp0export-cookies.py"
+set "LOCAL_COOKIE=%TEMP%\dabot-cookies.txt"
 
 echo Exporting Firefox YouTube cookies...
-%PYTHON_CMD% %SCRIPT_PATH% -o %LOCAL_COOKIE%
+"%PYTHON_CMD%" "%SCRIPT_PATH%" -o "%LOCAL_COOKIE%"
 if errorlevel 1 (
-    echo ERROR: export-cookies.py failed
+    echo ERROR: export failed; server cookies left untouched.
+    if exist "%LOCAL_COOKIE%" del /f /q "%LOCAL_COOKIE%"
     exit /b 1
 )
-if not exist %LOCAL_COOKIE% (
-    echo ERROR: %LOCAL_COOKIE% not created
+if not exist "%LOCAL_COOKIE%" (
+    echo ERROR: %LOCAL_COOKIE% was not created.
     exit /b 1
 )
 
 echo Pushing to %SERVER%:%REMOTE_PATH% ...
-scp %LOCAL_COOKIE% %SERVER%:%REMOTE_PATH%
+scp "%LOCAL_COOKIE%" "%SERVER%:%REMOTE_PATH%"
 if errorlevel 1 (
-    echo ERROR: scp failed
+    echo ERROR: scp failed.
+    del /f /q "%LOCAL_COOKIE%" 2>nul
     exit /b 1
 )
 
-echo Cleaning up local file...
-del /f /q %LOCAL_COOKIE% 2>nul
-
+del /f /q "%LOCAL_COOKIE%" 2>nul
 echo Done.
