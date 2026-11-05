@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Export YouTube cookies from Firefox to Netscape format.
 
+Runs on the desktop that has Firefox; the server has no browser and only
+receives the resulting cookies.txt via push-cookies.bat.
+
 Usage:
     python export-cookies.py                    # writes to ./cookies.txt
     python export-cookies.py -o /path/out.txt  # custom output

@@ -140,6 +140,9 @@ AGENTS.md             maintenance notes: deployment, ffmpeg options, design deci
 Age-gated videos need fresh cookies. The bot reloads `cookies.txt` on every
 extraction, so you only need to push an updated file — no container restart.
 
+Both scripts run **only on the Windows desktop** that has Firefox. The server
+has no browser and never runs the exporter; it just receives `cookies.txt`.
+
 **scripts/export-cookies.py** reads Firefox cookies and writes Netscape format.
 **scripts/push-cookies.bat** runs it and `scp`s the file to the server.
 
