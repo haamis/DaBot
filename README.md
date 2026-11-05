@@ -156,6 +156,10 @@ has no browser and never runs the exporter; it just receives `cookies.txt`.
    scripts\push-cookies.bat haama@boksi.local /home/haama/DaBot/cookies.txt
    ```
 
+   The SSH key defaults to `~/.ssh/id_local`; pass another path as the fourth
+   argument to override. The `.bat` expands `~` to `%USERPROFILE%` because
+   Windows `scp` does not do that itself.
+
 3. Schedule it (Task Scheduler → Create Basic Task):
    - Trigger: Daily / every 6 hours / whatever you prefer.
    - Action: Start a program → `cmd.exe`
