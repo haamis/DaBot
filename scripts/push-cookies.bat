@@ -1,14 +1,14 @@
 @echo off
 REM Export Firefox YouTube cookies and push to the DaBot server via scp.
 REM Usage: push-cookies.bat [user@host] [remote_path] [python_cmd]
-REM   Default server: haama@server
+REM   Default server: haama@boksi.local
 REM   Default remote: /home/haama/DaBot/cookies.txt
 REM   Default python: python
 
 setlocal
 
 set "SERVER=%~1"
-if "%SERVER%"=="" set "SERVER=haama@server"
+if "%SERVER%"=="" set "SERVER=haama@boksi.local"
 
 set "REMOTE_PATH=%~2"
 if "%REMOTE_PATH%"=="" set "REMOTE_PATH=/home/haama/DaBot/cookies.txt"

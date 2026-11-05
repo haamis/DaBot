@@ -153,7 +153,7 @@ has no browser and never runs the exporter; it just receives `cookies.txt`.
 
 2. Test manually (adjust server/path):
    ```cmd
-   scripts\push-cookies.bat haama@server /home/haama/DaBot/cookies.txt
+   scripts\push-cookies.bat haama@boksi.local /home/haama/DaBot/cookies.txt
    ```
 
 3. Schedule it (Task Scheduler → Create Basic Task):
@@ -161,7 +161,7 @@ has no browser and never runs the exporter; it just receives `cookies.txt`.
    - Action: Start a program → `cmd.exe`
    - Arguments:
      ```
-     /c "C:\path\to\DaBot\scripts\push-cookies.bat" haama@server /home/haama/DaBot/cookies.txt
+     /c "C:\path\to\DaBot\scripts\push-cookies.bat" haama@boksi.local /home/haama/DaBot/cookies.txt
      ```
    - Run only when the user is logged on (needs the Firefox profile).
 
