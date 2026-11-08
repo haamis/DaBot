@@ -16,7 +16,8 @@ WORKDIR /app
 COPY music_bot.py .
 
 ENV PYTHONUNBUFFERED=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    UV_NO_CACHE=1
 
 # App deps matching the working host. discord.py[voice] pulls aiohttp, PyNaCl and
 # davey (Discord's DAVE/E2EE voice, required or voice connections get dropped);
@@ -30,6 +31,12 @@ RUN uv pip install --system \
     "davey==0.1.7" \
     "yt-dlp[default]" \
     bgutil-ytdlp-pot-provider
+
+# Refresh only this layer during scheduled builds; leave pinned voice deps alone.
+ARG MEDIA_REFRESH=manual
+LABEL homelab.media-refresh=true
+RUN echo "Media dependency refresh: ${MEDIA_REFRESH}" \
+    && uv pip install --system --upgrade --pre 'yt-dlp[default]' bgutil-ytdlp-pot-provider
 
 # yt-dlp rots fast and YouTube breaks with it; refresh on start (`|| true`) so a bad
 # release or an offline start only warns and the bot runs on the baked-in version.
