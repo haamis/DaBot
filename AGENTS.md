@@ -4,7 +4,7 @@
 
 - Single-file bot: `music_bot.py`, run by the Docker container (`Dockerfile`). Docker Compose
   is the only supported deployment.
-- Run tests from the repository root with the venv: `./venv/bin/python -m unittest` (discovers tests under `test/`).
+- Run tests from the repository root using the Compose-built image: `docker compose build music-bot`, then `docker run --rm --network none --mount "type=bind,src=$(pwd),dst=/app,readonly" --workdir /app --env PYTHONDONTWRITEBYTECODE=1 dabot-music-bot:latest python -m unittest` (discovers tests under `test/`; no host venv needed).
 - Some queue tests deliberately use `test.com` URLs, so yt-dlp DNS errors may appear even when the suite passes.
 - Voice-channel logic is asynchronous: test it with mocked voice clients and `AsyncMock` for `disconnect()`.
 - Startup prints like `Logged in as ...` appear in `docker compose logs` (the image runs

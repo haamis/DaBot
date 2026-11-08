@@ -109,8 +109,15 @@ working if the provider is unavailable.
 ## Tests
 
 ```sh
-./venv/bin/python -m unittest
+docker compose build music-bot
+docker run --rm --network none \
+  --mount "type=bind,src=$(pwd),dst=/app,readonly" \
+  --workdir /app --env PYTHONDONTWRITEBYTECODE=1 \
+  dabot-music-bot:latest python -m unittest
 ```
+
+Run from the repository root. Tests use the bot image with the source mounted read-only;
+no host Python environment or running bot is needed.
 
 Tests live under `test/` and are pure unit tests (mocked voice clients and yt-dlp). Queue
 tests use `test.com` URLs on purpose, so yt-dlp DNS errors in the output do not mean failure.
